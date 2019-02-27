@@ -20,7 +20,7 @@
 #include <linux/efi-bgrt.h>
 
 struct acpi_table_bgrt bgrt_tab;
-size_t __initdata bgrt_image_size;
+size_t bgrt_image_size;
 
 struct bmp_header {
 	u16 id;
@@ -34,6 +34,9 @@ void __init efi_bgrt_init(struct acpi_table_header *table)
 	struct acpi_table_bgrt *bgrt = &bgrt_tab;
 
 	if (acpi_disabled)
+		return;
+
+	if (!efi_enabled(EFI_MEMMAP))
 		return;
 
 	if (table->length < sizeof(bgrt_tab)) {
@@ -62,6 +65,10 @@ void __init efi_bgrt_init(struct acpi_table_header *table)
 		goto out;
 	}
 
+	if (efi_mem_type(bgrt->image_address) != EFI_BOOT_SERVICES_DATA) {
+		pr_notice("Ignoring BGRT: invalid image address\n");
+		goto out;
+	}
 	image = early_memremap(bgrt->image_address, sizeof(bmp_header));
 	if (!image) {
 		pr_notice("Ignoring BGRT: failed to map image header memory\n");

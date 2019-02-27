@@ -23,6 +23,42 @@
  */
 #include "priv.h"
 
+s64
+nvkm_timer_wait_test(struct nvkm_timer_wait *wait)
+{
+	struct nvkm_subdev *subdev = &wait->tmr->subdev;
+	u64 time = nvkm_timer_read(wait->tmr);
+
+	if (wait->reads == 0) {
+		wait->time0 = time;
+		wait->time1 = time;
+	}
+
+	if (wait->time1 == time) {
+		if (wait->reads++ == 16) {
+			nvkm_fatal(subdev, "stalled at %016llx\n", time);
+			return -ETIMEDOUT;
+		}
+	} else {
+		wait->time1 = time;
+		wait->reads = 1;
+	}
+
+	if (wait->time1 - wait->time0 > wait->limit)
+		return -ETIMEDOUT;
+
+	return wait->time1 - wait->time0;
+}
+
+void
+nvkm_timer_wait_init(struct nvkm_device *device, u64 nsec,
+		     struct nvkm_timer_wait *wait)
+{
+	wait->tmr = device->timer;
+	wait->limit = nsec;
+	wait->reads = 0;
+}
+
 u64
 nvkm_timer_read(struct nvkm_timer *tmr)
 {
@@ -50,7 +86,8 @@ nvkm_timer_alarm_trigger(struct nvkm_timer *tmr)
 		/* Move to completed list.  We'll drop the lock before
 		 * executing the callback so it can reschedule itself.
 		 */
-		list_move_tail(&alarm->head, &exec);
+		list_del_init(&alarm->head);
+		list_add(&alarm->exec, &exec);
 	}
 
 	/* Shut down interrupt if no more pending alarms. */
@@ -59,8 +96,8 @@ nvkm_timer_alarm_trigger(struct nvkm_timer *tmr)
 	spin_unlock_irqrestore(&tmr->lock, flags);
 
 	/* Execute completed callbacks. */
-	list_for_each_entry_safe(alarm, atemp, &exec, head) {
-		list_del_init(&alarm->head);
+	list_for_each_entry_safe(alarm, atemp, &exec, exec) {
+		list_del(&alarm->exec);
 		alarm->func(alarm);
 	}
 }
@@ -101,15 +138,6 @@ nvkm_timer_alarm(struct nvkm_timer *tmr, u32 nsec, struct nvkm_alarm *alarm)
 			WARN_ON(alarm->timestamp <= nvkm_timer_read(tmr));
 		}
 	}
-	spin_unlock_irqrestore(&tmr->lock, flags);
-}
-
-void
-nvkm_timer_alarm_cancel(struct nvkm_timer *tmr, struct nvkm_alarm *alarm)
-{
-	unsigned long flags;
-	spin_lock_irqsave(&tmr->lock, flags);
-	list_del_init(&alarm->head);
 	spin_unlock_irqrestore(&tmr->lock, flags);
 }
 

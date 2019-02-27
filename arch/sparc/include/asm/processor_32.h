@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /* include/asm/processor.h
  *
  * Copyright (C) 1994 David S. Miller (davem@caip.rutgers.edu)
@@ -5,12 +6,6 @@
 
 #ifndef __ASM_SPARC_PROCESSOR_H
 #define __ASM_SPARC_PROCESSOR_H
-
-/*
- * Sparc32 implementation of macro that returns current
- * instruction pointer ("program counter").
- */
-#define current_text_addr() ({ void *pc; __asm__("sethi %%hi(1f), %0; or %0, %%lo(1f), %0;\n1:" : "=r" (pc)); pc; })
 
 #include <asm/psr.h>
 #include <asm/ptrace.h>
@@ -66,9 +61,6 @@ struct thread_struct {
 	.flags = SPARC_FLAG_KTHREAD, \
 	.current_ds = KERNEL_DS, \
 }
-
-/* Return saved PC of a blocked thread. */
-unsigned long thread_saved_pc(struct task_struct *t);
 
 /* Do necessary setup to start up a newly executed thread. */
 static inline void start_thread(struct pt_regs * regs, unsigned long pc,

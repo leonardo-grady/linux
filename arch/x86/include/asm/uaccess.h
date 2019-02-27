@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_UACCESS_H
 #define _ASM_X86_UACCESS_H
 /*
@@ -26,7 +27,12 @@
 
 #define get_ds()	(KERNEL_DS)
 #define get_fs()	(current->thread.addr_limit)
-#define set_fs(x)	(current->thread.addr_limit = (x))
+static inline void set_fs(mm_segment_t fs)
+{
+	current->thread.addr_limit = fs;
+	/* On user-mode return, check fs is correct */
+	set_thread_flag(TIF_FSCHECK);
+}
 
 #define segment_eq(a, b)	((a).seg == (b).seg)
 
@@ -71,9 +77,6 @@ static inline bool __chk_range_not_ok(unsigned long addr, unsigned long size, un
 
 /**
  * access_ok: - Checks if a user space pointer is valid
- * @type: Type of access: %VERIFY_READ or %VERIFY_WRITE.  Note that
- *        %VERIFY_WRITE is a superset of %VERIFY_READ - if it is safe
- *        to write to a block, it is always safe to read from it.
  * @addr: User space pointer to start of block to check
  * @size: Size of block to check
  *
@@ -89,7 +92,7 @@ static inline bool __chk_range_not_ok(unsigned long addr, unsigned long size, un
  * checks that the pointer is in the user space range - after calling
  * this function, memory access functions may still return -EFAULT.
  */
-#define access_ok(type, addr, size)					\
+#define access_ok(addr, size)					\
 ({									\
 	WARN_ON_IN_IRQ();						\
 	likely(!__range_not_ok(addr, size, user_addr_max()));		\
@@ -118,6 +121,11 @@ extern int __get_user_bad(void);
 
 #define __uaccess_begin() stac()
 #define __uaccess_end()   clac()
+#define __uaccess_begin_nospec()	\
+({					\
+	stac();				\
+	barrier_nospec();		\
+})
 
 /*
  * This is a type: either unsigned long, if the argument fits into
@@ -161,11 +169,11 @@ __typeof__(__builtin_choose_expr(sizeof(x) > sizeof(0UL), 0ULL, 0UL))
 ({									\
 	int __ret_gu;							\
 	register __inttype(*(ptr)) __val_gu asm("%"_ASM_DX);		\
-	register void *__sp asm(_ASM_SP);				\
 	__chk_user_ptr(ptr);						\
 	might_fault();							\
 	asm volatile("call __get_user_%P4"				\
-		     : "=a" (__ret_gu), "=r" (__val_gu), "+r" (__sp)	\
+		     : "=a" (__ret_gu), "=r" (__val_gu),		\
+			ASM_CALL_CONSTRAINT				\
 		     : "0" (ptr), "i" (sizeof(*(ptr))));		\
 	(x) = (__force __typeof__(*(ptr))) __val_gu;			\
 	__builtin_expect(__ret_gu, 0);					\
@@ -178,19 +186,14 @@ __typeof__(__builtin_choose_expr(sizeof(x) > sizeof(0UL), 0ULL, 0UL))
 
 
 #ifdef CONFIG_X86_32
-#define __put_user_asm_u64(x, addr, err, errret)			\
-	asm volatile("\n"						\
-		     "1:	movl %%eax,0(%2)\n"			\
-		     "2:	movl %%edx,4(%2)\n"			\
-		     "3:"						\
-		     ".section .fixup,\"ax\"\n"				\
-		     "4:	movl %3,%0\n"				\
-		     "	jmp 3b\n"					\
-		     ".previous\n"					\
-		     _ASM_EXTABLE(1b, 4b)				\
-		     _ASM_EXTABLE(2b, 4b)				\
-		     : "=r" (err)					\
-		     : "A" (x), "r" (addr), "i" (errret), "0" (err))
+#define __put_user_goto_u64(x, addr, label)			\
+	asm_volatile_goto("\n"					\
+		     "1:	movl %%eax,0(%1)\n"		\
+		     "2:	movl %%edx,4(%1)\n"		\
+		     _ASM_EXTABLE_UA(1b, %l2)			\
+		     _ASM_EXTABLE_UA(2b, %l2)			\
+		     : : "A" (x), "r" (addr)			\
+		     : : label)
 
 #define __put_user_asm_ex_u64(x, addr)					\
 	asm volatile("\n"						\
@@ -205,8 +208,8 @@ __typeof__(__builtin_choose_expr(sizeof(x) > sizeof(0UL), 0ULL, 0UL))
 	asm volatile("call __put_user_8" : "=a" (__ret_pu)	\
 		     : "A" ((typeof(*(ptr)))(x)), "c" (ptr) : "ebx")
 #else
-#define __put_user_asm_u64(x, ptr, retval, errret) \
-	__put_user_asm(x, ptr, retval, "q", "", "er", errret)
+#define __put_user_goto_u64(x, ptr, label) \
+	__put_user_goto(x, ptr, "q", "", "er", label)
 #define __put_user_asm_ex_u64(x, addr)	\
 	__put_user_asm_ex(x, addr, "q", "", "er")
 #define __put_user_x8(x, ptr, __ret_pu) __put_user_x(8, x, ptr, __ret_pu)
@@ -267,23 +270,21 @@ extern void __put_user_8(void);
 	__builtin_expect(__ret_pu, 0);				\
 })
 
-#define __put_user_size(x, ptr, size, retval, errret)			\
+#define __put_user_size(x, ptr, size, label)				\
 do {									\
-	retval = 0;							\
 	__chk_user_ptr(ptr);						\
 	switch (size) {							\
 	case 1:								\
-		__put_user_asm(x, ptr, retval, "b", "b", "iq", errret);	\
+		__put_user_goto(x, ptr, "b", "b", "iq", label);	\
 		break;							\
 	case 2:								\
-		__put_user_asm(x, ptr, retval, "w", "w", "ir", errret);	\
+		__put_user_goto(x, ptr, "w", "w", "ir", label);		\
 		break;							\
 	case 4:								\
-		__put_user_asm(x, ptr, retval, "l", "k", "ir", errret);	\
+		__put_user_goto(x, ptr, "l", "k", "ir", label);		\
 		break;							\
 	case 8:								\
-		__put_user_asm_u64((__typeof__(*ptr))(x), ptr, retval,	\
-				   errret);				\
+		__put_user_goto_u64((__typeof__(*ptr))(x), ptr, label);	\
 		break;							\
 	default:							\
 		__put_user_bad();					\
@@ -319,20 +320,20 @@ do {									\
 #define __get_user_asm_u64(x, ptr, retval, errret)			\
 ({									\
 	__typeof__(ptr) __ptr = (ptr);					\
-	asm volatile(ASM_STAC "\n"					\
+	asm volatile("\n"					\
 		     "1:	movl %2,%%eax\n"			\
 		     "2:	movl %3,%%edx\n"			\
-		     "3: " ASM_CLAC "\n"				\
+		     "3:\n"				\
 		     ".section .fixup,\"ax\"\n"				\
 		     "4:	mov %4,%0\n"				\
 		     "	xorl %%eax,%%eax\n"				\
 		     "	xorl %%edx,%%edx\n"				\
 		     "	jmp 3b\n"					\
 		     ".previous\n"					\
-		     _ASM_EXTABLE(1b, 4b)				\
-		     _ASM_EXTABLE(2b, 4b)				\
-		     : "=r" (retval), "=A"(x)				\
-		     : "m" (__m(__ptr)), "m" __m(((u32 *)(__ptr)) + 1),	\
+		     _ASM_EXTABLE_UA(1b, 4b)				\
+		     _ASM_EXTABLE_UA(2b, 4b)				\
+		     : "=r" (retval), "=&A"(x)				\
+		     : "m" (__m(__ptr)), "m" __m(((u32 __user *)(__ptr)) + 1),	\
 		       "i" (errret), "0" (retval));			\
 })
 
@@ -375,7 +376,7 @@ do {									\
 		     "	xor"itype" %"rtype"1,%"rtype"1\n"		\
 		     "	jmp 2b\n"					\
 		     ".previous\n"					\
-		     _ASM_EXTABLE(1b, 3b)				\
+		     _ASM_EXTABLE_UA(1b, 3b)				\
 		     : "=r" (err), ltype(x)				\
 		     : "m" (__m(addr)), "i" (errret), "0" (err))
 
@@ -387,7 +388,7 @@ do {									\
 		     "3:	mov %3,%0\n"				\
 		     "	jmp 2b\n"					\
 		     ".previous\n"					\
-		     _ASM_EXTABLE(1b, 3b)				\
+		     _ASM_EXTABLE_UA(1b, 3b)				\
 		     : "=r" (err), ltype(x)				\
 		     : "m" (__m(addr)), "i" (errret), "0" (err))
 
@@ -428,9 +429,12 @@ do {									\
 
 #define __put_user_nocheck(x, ptr, size)			\
 ({								\
-	int __pu_err;						\
+	__label__ __pu_label;					\
+	int __pu_err = -EFAULT;					\
 	__uaccess_begin();					\
-	__put_user_size((x), (ptr), (size), __pu_err, -EFAULT);	\
+	__put_user_size((x), (ptr), (size), __pu_label);	\
+	__pu_err = 0;						\
+__pu_label:							\
 	__uaccess_end();					\
 	__builtin_expect(__pu_err, 0);				\
 })
@@ -439,7 +443,7 @@ do {									\
 ({									\
 	int __gu_err;							\
 	__inttype(*(ptr)) __gu_val;					\
-	__uaccess_begin();						\
+	__uaccess_begin_nospec();					\
 	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
 	__uaccess_end();						\
 	(x) = (__force __typeof__(*(ptr)))__gu_val;			\
@@ -455,17 +459,23 @@ struct __large_struct { unsigned long buf[100]; };
  * we do not write to any memory gcc knows about, so there are no
  * aliasing issues.
  */
-#define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
-	asm volatile("\n"						\
-		     "1:	mov"itype" %"rtype"1,%2\n"		\
-		     "2:\n"						\
-		     ".section .fixup,\"ax\"\n"				\
-		     "3:	mov %3,%0\n"				\
-		     "	jmp 2b\n"					\
-		     ".previous\n"					\
-		     _ASM_EXTABLE(1b, 3b)				\
-		     : "=r"(err)					\
-		     : ltype(x), "m" (__m(addr)), "i" (errret), "0" (err))
+#define __put_user_goto(x, addr, itype, rtype, ltype, label)	\
+	asm_volatile_goto("\n"						\
+		"1:	mov"itype" %"rtype"0,%1\n"			\
+		_ASM_EXTABLE_UA(1b, %l2)					\
+		: : ltype(x), "m" (__m(addr))				\
+		: : label)
+
+#define __put_user_failed(x, addr, itype, rtype, ltype, errret)		\
+	({	__label__ __puflab;					\
+		int __pufret = errret;					\
+		__put_user_goto(x,addr,itype,rtype,ltype,__puflab);	\
+		__pufret = 0;						\
+	__puflab: __pufret; })
+
+#define __put_user_asm(x, addr, retval, itype, rtype, ltype, errret)	do {	\
+	retval = __put_user_failed(x, addr, itype, rtype, ltype, errret);	\
+} while (0)
 
 #define __put_user_asm_ex(x, addr, itype, rtype, ltype)			\
 	asm volatile("1:	mov"itype" %"rtype"0,%1\n"		\
@@ -480,6 +490,10 @@ struct __large_struct { unsigned long buf[100]; };
 	current->thread.uaccess_err = 0;				\
 	__uaccess_begin();						\
 	barrier();
+
+#define uaccess_try_nospec do {						\
+	current->thread.uaccess_err = 0;				\
+	__uaccess_begin_nospec();					\
 
 #define uaccess_catch(err)						\
 	__uaccess_end();						\
@@ -535,9 +549,6 @@ struct __large_struct { unsigned long buf[100]; };
 #define __put_user(x, ptr)						\
 	__put_user_nocheck((__typeof__(*(ptr)))(x), (ptr), sizeof(*(ptr)))
 
-#define __get_user_unaligned __get_user
-#define __put_user_unaligned __put_user
-
 /*
  * {get|put}_user_try and catch
  *
@@ -545,7 +556,7 @@ struct __large_struct { unsigned long buf[100]; };
  *	get_user_ex(...);
  * } get_user_catch(err)
  */
-#define get_user_try		uaccess_try
+#define get_user_try		uaccess_try_nospec
 #define get_user_catch(err)	uaccess_catch(err)
 
 #define get_user_ex(x, ptr)	do {					\
@@ -565,7 +576,6 @@ copy_from_user_nmi(void *to, const void __user *from, unsigned long n);
 extern __must_check long
 strncpy_from_user(char *dst, const char __user *src, long count);
 
-extern __must_check long strlen_user(const char __user *str);
 extern __must_check long strnlen_user(const char __user *str, long n);
 
 unsigned long __must_check clear_user(void __user *mem, unsigned long len);
@@ -580,7 +590,7 @@ extern void __cmpxchg_wrong_size(void)
 	__typeof__(ptr) __uval = (uval);				\
 	__typeof__(*(ptr)) __old = (old);				\
 	__typeof__(*(ptr)) __new = (new);				\
-	__uaccess_begin();						\
+	__uaccess_begin_nospec();					\
 	switch (size) {							\
 	case 1:								\
 	{								\
@@ -591,7 +601,7 @@ extern void __cmpxchg_wrong_size(void)
 			"3:\tmov     %3, %0\n"				\
 			"\tjmp     2b\n"				\
 			"\t.previous\n"					\
-			_ASM_EXTABLE(1b, 3b)				\
+			_ASM_EXTABLE_UA(1b, 3b)				\
 			: "+r" (__ret), "=a" (__old), "+m" (*(ptr))	\
 			: "i" (-EFAULT), "q" (__new), "1" (__old)	\
 			: "memory"					\
@@ -607,7 +617,7 @@ extern void __cmpxchg_wrong_size(void)
 			"3:\tmov     %3, %0\n"				\
 			"\tjmp     2b\n"				\
 			"\t.previous\n"					\
-			_ASM_EXTABLE(1b, 3b)				\
+			_ASM_EXTABLE_UA(1b, 3b)				\
 			: "+r" (__ret), "=a" (__old), "+m" (*(ptr))	\
 			: "i" (-EFAULT), "r" (__new), "1" (__old)	\
 			: "memory"					\
@@ -623,7 +633,7 @@ extern void __cmpxchg_wrong_size(void)
 			"3:\tmov     %3, %0\n"				\
 			"\tjmp     2b\n"				\
 			"\t.previous\n"					\
-			_ASM_EXTABLE(1b, 3b)				\
+			_ASM_EXTABLE_UA(1b, 3b)				\
 			: "+r" (__ret), "=a" (__old), "+m" (*(ptr))	\
 			: "i" (-EFAULT), "r" (__new), "1" (__old)	\
 			: "memory"					\
@@ -642,7 +652,7 @@ extern void __cmpxchg_wrong_size(void)
 			"3:\tmov     %3, %0\n"				\
 			"\tjmp     2b\n"				\
 			"\t.previous\n"					\
-			_ASM_EXTABLE(1b, 3b)				\
+			_ASM_EXTABLE_UA(1b, 3b)				\
 			: "+r" (__ret), "=a" (__old), "+m" (*(ptr))	\
 			: "i" (-EFAULT), "r" (__new), "1" (__old)	\
 			: "memory"					\
@@ -659,7 +669,7 @@ extern void __cmpxchg_wrong_size(void)
 
 #define user_atomic_cmpxchg_inatomic(uval, ptr, old, new)		\
 ({									\
-	access_ok(VERIFY_WRITE, (ptr), sizeof(*(ptr))) ?		\
+	access_ok((ptr), sizeof(*(ptr))) ?		\
 		__user_atomic_cmpxchg_inatomic((uval), (ptr),		\
 				(old), (new), sizeof(*(ptr))) :		\
 		-EFAULT;						\
@@ -697,20 +707,23 @@ extern struct movsl_mask {
  * checking before using them, but you have to surround them with the
  * user_access_begin/end() pair.
  */
-#define user_access_begin()	__uaccess_begin()
+static __must_check inline bool user_access_begin(const void __user *ptr, size_t len)
+{
+	if (unlikely(!access_ok(ptr,len)))
+		return 0;
+	__uaccess_begin_nospec();
+	return 1;
+}
+#define user_access_begin(a,b)	user_access_begin(a,b)
 #define user_access_end()	__uaccess_end()
 
-#define unsafe_put_user(x, ptr, err_label)					\
-do {										\
-	int __pu_err;								\
-	__put_user_size((x), (ptr), sizeof(*(ptr)), __pu_err, -EFAULT);		\
-	if (unlikely(__pu_err)) goto err_label;					\
-} while (0)
+#define unsafe_put_user(x, ptr, label)	\
+	__put_user_size((__typeof__(*(ptr)))(x), (ptr), sizeof(*(ptr)), label)
 
 #define unsafe_get_user(x, ptr, err_label)					\
 do {										\
 	int __gu_err;								\
-	unsigned long __gu_val;							\
+	__inttype(*(ptr)) __gu_val;						\
 	__get_user_size(__gu_val, (ptr), sizeof(*(ptr)), __gu_err, -EFAULT);	\
 	(x) = (__force __typeof__(*(ptr)))__gu_val;				\
 	if (unlikely(__gu_err)) goto err_label;					\

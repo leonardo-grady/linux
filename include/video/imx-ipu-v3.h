@@ -246,10 +246,14 @@ struct ipu_image {
 	struct v4l2_rect rect;
 	dma_addr_t phys0;
 	dma_addr_t phys1;
+	/* chroma plane offset overrides */
+	u32 u_offset;
+	u32 v_offset;
 };
 
 void ipu_cpmem_zero(struct ipuv3_channel *ch);
 void ipu_cpmem_set_resolution(struct ipuv3_channel *ch, int xres, int yres);
+void ipu_cpmem_skip_odd_chroma_rows(struct ipuv3_channel *ch);
 void ipu_cpmem_set_stride(struct ipuv3_channel *ch, int stride);
 void ipu_cpmem_set_high_priority(struct ipuv3_channel *ch);
 void ipu_cpmem_set_buffer(struct ipuv3_channel *ch, int bufnum, dma_addr_t buf);
@@ -343,7 +347,7 @@ void ipu_prg_channel_disable(struct ipuv3_channel *ipu_chan);
 int ipu_prg_channel_configure(struct ipuv3_channel *ipu_chan,
 			      unsigned int axi_id,  unsigned int width,
 			      unsigned int height, unsigned int stride,
-			      u32 format, unsigned long *eba);
+			      u32 format, uint64_t modifier, unsigned long *eba);
 
 /*
  * IPU CMOS Sensor Interface (csi) functions
@@ -386,6 +390,12 @@ int ipu_ic_task_init(struct ipu_ic *ic,
 		     int out_width, int out_height,
 		     enum ipu_color_space in_cs,
 		     enum ipu_color_space out_cs);
+int ipu_ic_task_init_rsc(struct ipu_ic *ic,
+			 int in_width, int in_height,
+			 int out_width, int out_height,
+			 enum ipu_color_space in_cs,
+			 enum ipu_color_space out_cs,
+			 u32 rsc);
 int ipu_ic_task_graphics_init(struct ipu_ic *ic,
 			      enum ipu_color_space in_g_cs,
 			      bool galpha_en, u32 galpha,

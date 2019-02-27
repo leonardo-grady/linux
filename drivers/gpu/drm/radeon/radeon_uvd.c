@@ -621,7 +621,7 @@ static int radeon_uvd_cs_reloc(struct radeon_cs_parser *p,
 	}
 
 	/* TODO: is this still necessary on NI+ ? */
-	if ((cmd == 0 || cmd == 1 || cmd == 0x3) &&
+	if ((cmd == 0 || cmd == 0x3) &&
 	    (start >> 28) != (p->rdev->uvd.gpu_addr >> 28)) {
 		DRM_ERROR("msg/fb buffer %LX-%LX out of 256MB segment!\n",
 			  start, end);
@@ -995,7 +995,7 @@ int radeon_uvd_calc_upll_dividers(struct radeon_device *rdev,
 		/* calc dclk divider with current vco freq */
 		dclk_div = radeon_uvd_calc_upll_post_div(vco_freq, dclk,
 							 pd_min, pd_even);
-		if (vclk_div > pd_max)
+		if (dclk_div > pd_max)
 			break; /* vco is too big, it has to stop */
 
 		/* calc score with current vco freq */

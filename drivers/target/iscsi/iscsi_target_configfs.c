@@ -781,6 +781,7 @@ DEF_TPG_ATTRIB(default_erl);
 DEF_TPG_ATTRIB(t10_pi);
 DEF_TPG_ATTRIB(fabric_prot_type);
 DEF_TPG_ATTRIB(tpg_enabled_sendtargets);
+DEF_TPG_ATTRIB(login_keys_workaround);
 
 static struct configfs_attribute *lio_target_tpg_attrib_attrs[] = {
 	&iscsi_tpg_attrib_attr_authentication,
@@ -796,6 +797,7 @@ static struct configfs_attribute *lio_target_tpg_attrib_attrs[] = {
 	&iscsi_tpg_attrib_attr_t10_pi,
 	&iscsi_tpg_attrib_attr_fabric_prot_type,
 	&iscsi_tpg_attrib_attr_tpg_enabled_sendtargets,
+	&iscsi_tpg_attrib_attr_login_keys_workaround,
 	NULL,
 };
 
@@ -1088,10 +1090,8 @@ static struct configfs_attribute *lio_target_tpg_attrs[] = {
 
 /* Start items for lio_target_tiqn_cit */
 
-static struct se_portal_group *lio_target_tiqn_addtpg(
-	struct se_wwn *wwn,
-	struct config_group *group,
-	const char *name)
+static struct se_portal_group *lio_target_tiqn_addtpg(struct se_wwn *wwn,
+						      const char *name)
 {
 	struct iscsi_portal_group *tpg;
 	struct iscsi_tiqn *tiqn;
@@ -1121,7 +1121,7 @@ static struct se_portal_group *lio_target_tiqn_addtpg(
 
 	ret = core_tpg_register(wwn, &tpg->tpg_se_tpg, SCSI_PROTOCOL_ISCSI);
 	if (ret < 0)
-		return NULL;
+		goto free_out;
 
 	ret = iscsit_tpg_add_portal_group(tiqn, tpg);
 	if (ret != 0)
@@ -1133,6 +1133,7 @@ static struct se_portal_group *lio_target_tiqn_addtpg(
 	return &tpg->tpg_se_tpg;
 out:
 	core_tpg_deregister(&tpg->tpg_se_tpg);
+free_out:
 	kfree(tpg);
 	return NULL;
 }
@@ -1342,11 +1343,6 @@ static struct configfs_attribute *lio_target_discovery_auth_attrs[] = {
 
 /* Start functions for target_core_fabric_ops */
 
-static char *iscsi_get_fabric_name(void)
-{
-	return "iSCSI";
-}
-
 static int iscsi_get_cmd_state(struct se_cmd *se_cmd)
 {
 	struct iscsi_cmd *cmd = container_of(se_cmd, struct iscsi_cmd, se_cmd);
@@ -1548,9 +1544,9 @@ static void lio_release_cmd(struct se_cmd *se_cmd)
 
 const struct target_core_fabric_ops iscsi_ops = {
 	.module				= THIS_MODULE,
-	.name				= "iscsi",
+	.fabric_alias			= "iscsi",
+	.fabric_name			= "iSCSI",
 	.node_acl_size			= sizeof(struct iscsi_node_acl),
-	.get_fabric_name		= iscsi_get_fabric_name,
 	.tpg_get_wwn			= lio_tpg_get_endpoint_wwn,
 	.tpg_get_tag			= lio_tpg_get_tag,
 	.tpg_get_default_depth		= lio_tpg_get_default_depth,
@@ -1595,4 +1591,6 @@ const struct target_core_fabric_ops iscsi_ops = {
 	.tfc_tpg_nacl_attrib_attrs	= lio_target_nacl_attrib_attrs,
 	.tfc_tpg_nacl_auth_attrs	= lio_target_nacl_auth_attrs,
 	.tfc_tpg_nacl_param_attrs	= lio_target_nacl_param_attrs,
+
+	.write_pending_must_be_called	= true,
 };

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -7,6 +8,7 @@
 #include "map.h"
 #include "strlist.h"
 #include "symbol.h"
+#include "srcline.h"
 
 static int comma_fprintf(FILE *fp, bool *first, const char *fmt, ...)
 {
@@ -71,7 +73,7 @@ int perf_evsel__fprintf(struct perf_evsel *evsel,
 	}
 
 	if (details->trace_fields) {
-		struct format_field *field;
+		struct tep_format_field *field;
 
 		if (evsel->attr.type != PERF_TYPE_TRACEPOINT) {
 			printed += comma_fprintf(fp, &first, " (not a tracepoint)");
@@ -156,7 +158,7 @@ int sample__fprintf_callchain(struct perf_sample *sample, int left_alignment,
 				}
 			}
 
-			if (print_dso) {
+			if (print_dso && (!node->sym || !node->sym->inlined)) {
 				printed += fprintf(fp, " (");
 				printed += map__fprintf_dsoname(node->map, fp);
 				printed += fprintf(fp, ")");
@@ -165,9 +167,13 @@ int sample__fprintf_callchain(struct perf_sample *sample, int left_alignment,
 			if (print_srcline)
 				printed += map__fprintf_srcline(node->map, addr, "\n  ", fp);
 
+			if (node->sym && node->sym->inlined)
+				printed += fprintf(fp, " (inlined)");
+
 			if (!print_oneline)
 				printed += fprintf(fp, "\n");
 
+			/* Add srccode here too? */
 			if (symbol_conf.bt_stop_list &&
 			    node->sym &&
 			    strlist__has_entry(symbol_conf.bt_stop_list,

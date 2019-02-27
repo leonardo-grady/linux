@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * include/asm-m68k/processor.h
  *
@@ -6,12 +7,6 @@
 
 #ifndef __ASM_M68K_PROCESSOR_H
 #define __ASM_M68K_PROCESSOR_H
-
-/*
- * Default implementation of macro that returns current
- * instruction pointer ("program counter").
- */
-#define current_text_addr() ({ __label__ _l; _l: &&_l;})
 
 #include <linux/thread_info.h>
 #include <asm/segment.h>
@@ -129,8 +124,6 @@ struct task_struct;
 static inline void release_thread(struct task_struct *dead_task)
 {
 }
-
-extern unsigned long thread_saved_pc(struct task_struct *tsk);
 
 unsigned long get_wchan(struct task_struct *p);
 

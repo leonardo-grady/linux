@@ -28,6 +28,7 @@
 #include <linux/slab.h>
 #include <linux/bug.h>
 #include <linux/printk.h>
+#include "core.h"
 #include "patch.h"
 #include "transition.h"
 
@@ -59,7 +60,11 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 
 	ops = container_of(fops, struct klp_ops, fops);
 
-	rcu_read_lock();
+	/*
+	 * A variant of synchronize_rcu() is used to allow patching functions
+	 * where RCU is not watching, see klp_synchronize_transition().
+	 */
+	preempt_disable_notrace();
 
 	func = list_first_or_null_rcu(&ops->func_stack, struct klp_func,
 				      stack_node);
@@ -67,7 +72,7 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 	/*
 	 * func should never be NULL because preemption should be disabled here
 	 * and unregister_ftrace_function() does the equivalent of a
-	 * synchronize_sched() before the func_stack removal.
+	 * synchronize_rcu() before the func_stack removal.
 	 */
 	if (WARN_ON_ONCE(!func))
 		goto unlock;
@@ -115,7 +120,7 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 
 	klp_arch_set_pc(regs, (unsigned long)func->new_func);
 unlock:
-	rcu_read_unlock();
+	preempt_enable_notrace();
 }
 
 /*
